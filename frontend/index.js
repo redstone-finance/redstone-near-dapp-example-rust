@@ -1,7 +1,11 @@
 import 'regenerator-runtime/runtime'
 import { Wallet } from './near-wallet'
+import redstoneSDK from 'redstone-sdk'
+import { arrayify } from 'ethers/lib/utils'
 
 const CONTRACT_ADDRESS = process.env.CONTRACT_NAME;
+const SYMBOLS = ['BTC'];
+const NEAR_TESTNET_EXPLORER = 'https://explorer.testnet.near.org';
 
 // When creating the wallet you can choose to create an access key, so the user
 // can skip signing non-payable methods when interacting with the contract
@@ -17,7 +21,7 @@ window.onload = async () => {
     signedOutFlow()
   }
 
-  updateUI()
+  setUpLinkToTheIntegratedContract();
 }
 
 // Log in and log out users using NEAR Wallet
@@ -30,63 +34,103 @@ function signedOutFlow() {
   document.querySelectorAll('.interact').forEach(button => button.disabled = true)
 }
 
-// Displaying the signed in flow container and display counter
+async function getRedstonePayload(symbol) {
+  const redstoneDataGateways = [
+    'https://cache-service-direct-1.b.redstone.finance',
+    'https://d33trozg86ya9x.cloudfront.net',
+  ];
+  const redstonePayload = await redstoneSDK.requestRedstonePayload({
+    dataServiceId: 'redstone-main-demo',
+    uniqueSignersCount: 1,
+    dataFeeds: [symbol],
+  }, redstoneDataGateways);
+
+  return redstonePayload;
+}
+
+async function getPriceFromNearContract(symbol) {
+  const redstonePayload = await getRedstonePayload(symbol);
+  const priceValue = await wallet.viewMethod({
+    contractId: CONTRACT_ADDRESS,
+    method: 'get_oracle_value',
+    args: {
+      redstone_payload: redstonePayload,
+    },
+  });
+  return priceValue / (10 ** 8);
+}
+
+async function getAllPricesFromNearContract() {
+  const resultPrices = {};
+  for (const symbol of SYMBOLS) {
+    console.log(`Getting price for ${symbol}`);
+    const price = await getPriceFromNearContract(symbol);
+    console.log(`Received price for ${symbol}: ${price}`);
+    resultPrices[symbol] = price;
+  }
+  return resultPrices;
+}
+
+// Displaying the signed in flow container and display oracle button
 async function signedInFlow() {
   document.querySelector('.sign-out').style.display = 'block';
-  document.querySelectorAll('.interact').forEach(button => button.disabled = false)
+  document.querySelectorAll('.wallet-required').forEach(el => el.style.display = 'flex');
 }
 
-// Buttons - Interact with the Smart contract
-document.querySelector('#plus').addEventListener('click', async () => {
-  resetUI();
-  await wallet.callMethod({contractId: CONTRACT_ADDRESS, method: "increment"});
-  await updateUI();
-});
-
-document.querySelector('#minus').addEventListener('click', async  () => {
-  resetUI();
-  await wallet.callMethod({contractId: CONTRACT_ADDRESS, method: "decrement"});
-  await updateUI();
-});
-document.querySelector('#a').addEventListener('click', async  () => {
-  resetUI();
-  await wallet.callMethod({contractId: CONTRACT_ADDRESS, method: "reset"});
-  await updateUI();
-});
-
-// Update and Reset UI
-async function updateUI(){
-  let count = await wallet.viewMethod({contractId: CONTRACT_ADDRESS, method: "get_num"});
-  
-  document.querySelector('#show').classList.replace('loader','number');
-  document.querySelector('#show').innerText = count === undefined ? 'calculating...' : count;
-  document.querySelector('#left').classList.toggle('eye');
-
-  if (count >= 0) {
-    document.querySelector('.mouth').classList.replace('cry','smile');
-  } else {
-    document.querySelector('.mouth').classList.replace('smile','cry');
-  }
-
-  if (count > 20 || count < -20) {
-    document.querySelector('.tongue').style.display = 'block';
-  } else {
-    document.querySelector('.tongue').style.display = 'none';
+async function updateOracleData() {
+  try {
+    setLoading(true);
+    updateStatusMessage('Requesting oracle data...');
+    const prices = await getAllPricesFromNearContract();
+    await showNiceButMockStatuses();
+    setPricesInUI(prices);
+  } finally {
+    setLoading(false);
   }
 }
 
-function resetUI(){
-  document.querySelector('#show').classList.replace('number','loader');
-  document.querySelector('#show').innerText = '';
+function setPricesInUI(prices) {
+  document.getElementById('prices-container').style.display = 'flex';
+  for (const [symbol, value] of Object.entries(prices)) {
+    document.getElementById(`${symbol}-value`).innerHTML = value;
+  }
 }
 
-// Animations
-document.querySelector('#c').addEventListener('click', () => {
-  document.querySelector('#left').classList.toggle('eye');
-});
-document.querySelector('#b').addEventListener('click', () => {
-  document.querySelector('#right').classList.toggle('eye');
-});
-document.querySelector('#d').addEventListener('click', () => {
-  document.querySelector('.dot').classList.toggle('on');
+async function sleep(ms) {
+  return await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function updateStatusMessage(msg) {
+  const statusMsgEl = document.getElementById('status-msg-container');
+  statusMsgEl.innerHTML = msg;
+  statusMsgEl.style.display = 'block';
+}
+
+function setUpLinkToTheIntegratedContract() {
+  const linkEl = document.getElementById("integrated-contract-link");
+  linkEl.setAttribute('href', `${NEAR_TESTNET_EXPLORER}/accounts/${CONTRACT_ADDRESS}`);
+  linkEl.innerHTML = CONTRACT_ADDRESS;
+}
+
+// This function is used to improve the Demo experience
+// It shows status messages from the general steps, but in
+// practice these steps take way less time. We add `sleep` so
+// that users have time to read the messages
+async function showNiceButMockStatuses() {
+  updateStatusMessage('Fetching redstone payload...');
+  await sleep(2000);
+  updateStatusMessage('Redstone payload received');
+  await sleep(1000);
+  updateStatusMessage('Sending call to a NEAR smart contract...');
+  await sleep(2000);
+  updateStatusMessage('Received Oracle data from NEAR smart contract');
+}
+
+function setLoading(isVisible) {
+  document.getElementById('loader').style.display = (isVisible ? 'flex' : 'none');
+}
+
+// Handling oracle button click
+document.querySelector('#oracle-button').addEventListener('click', async () => {
+  await updateOracleData();
 });
